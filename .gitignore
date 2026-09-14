@@ -93,3 +93,8 @@ datasets/
 
 # Thumbnails
 ._*
+
+# Project artifacts (split manifests in manifests/ are versioned on purpose)
+*.db
+thresholds_search_data.pkl
+emissions.csv
