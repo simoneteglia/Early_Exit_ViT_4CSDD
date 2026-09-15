@@ -125,6 +125,8 @@ def parse_args():
     p.add_argument("--cache-dir", default=None)
     p.add_argument("--manifest", default="manifests/splits.json")
     p.add_argument("--synthetic", type=int, default=0)
+    p.add_argument("--max-per-class", type=int, default=0,
+                   help="Keep at most N samples per label (balanced subsample; 0 = all)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--image-size", type=int, default=224)
     p.add_argument("--batch-size", type=int, default=64)
@@ -144,7 +146,8 @@ def main():
         calibrators = pickle.load(f)
 
     model = load_model(args.checkpoint, device)
-    hf_ds, df, splits = prepare(args.dataset, args.manifest, args.synthetic, args.seed, cache_dir=args.cache_dir)
+    hf_ds, df, splits = prepare(args.dataset, args.manifest, args.synthetic, args.seed,
+                                cache_dir=args.cache_dir, max_per_class=args.max_per_class)
     datasets = build_datasets(hf_ds, df, splits, args.image_size)
     dataset = datasets[args.split]
     loader = build_loaders({args.split: dataset}, args.batch_size, args.num_workers,

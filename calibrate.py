@@ -43,6 +43,8 @@ def parse_args():
     p.add_argument("--cache-dir", default=None)
     p.add_argument("--manifest", default="manifests/splits.json")
     p.add_argument("--synthetic", type=int, default=0)
+    p.add_argument("--max-per-class", type=int, default=0,
+                   help="Keep at most N samples per label (balanced subsample; 0 = all)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--image-size", type=int, default=224)
     p.add_argument("--batch-size", type=int, default=128)
@@ -63,7 +65,8 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model = load_model(args.checkpoint, device)
-    hf_ds, df, splits = prepare(args.dataset, args.manifest, args.synthetic, args.seed, cache_dir=args.cache_dir)
+    hf_ds, df, splits = prepare(args.dataset, args.manifest, args.synthetic, args.seed,
+                                cache_dir=args.cache_dir, max_per_class=args.max_per_class)
     if args.max_train_samples and len(splits["train"]) > args.max_train_samples:
         rng = np.random.default_rng(args.seed)
         splits["train"] = np.sort(rng.choice(splits["train"], args.max_train_samples, replace=False))

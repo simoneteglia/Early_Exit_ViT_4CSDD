@@ -44,9 +44,22 @@ SPLITS = ("train", "val", "test")
 # ------------------------------------------------------------- loading -----
 
 def load_css_dataset(name=DATASET_NAME, split="train", cache_dir=None, token=None):
+    """Load the HF dataset and drop tampered samples (label_idx == 2).
+
+    The model uses binary BCE loss (real=0 / fake=1); tampered images
+    have label_idx=2 and must be excluded."""
     from datasets import load_dataset
     token = token or os.environ.get("HF_TOKEN")
-    return load_dataset(name, split=split, cache_dir=cache_dir, token=token)
+    ds = load_dataset(name, split=split, cache_dir=cache_dir, token=token)
+    n_before = len(ds)
+    if COL_LABEL_IDX in ds.column_names:
+        ds = ds.filter(lambda row: row[COL_LABEL_IDX] in (0, 1))
+    elif COL_LABEL in ds.column_names:
+        ds = ds.filter(lambda row: row[COL_LABEL].lower() in LABEL_MAP)
+    n_dropped = n_before - len(ds)
+    if n_dropped:
+        print(f"Filtered out {n_dropped} tampered samples ({n_before} → {len(ds)}).")
+    return ds
 
 
 def synthetic_dataset(n: int = 256, image_size: int = 224, seed: int = 0):
@@ -224,10 +237,29 @@ def build_loaders(datasets, batch_size=64, num_workers=4, pin_memory=True):
 
 
 def prepare(dataset_name=DATASET_NAME, manifest=None, synthetic: int = 0, seed=42,
-            fractions=(0.7, 0.15, 0.15), cache_dir=None):
+            fractions=(0.7, 0.15, 0.15), cache_dir=None, max_per_class: int = 0):
     """Load the HF dataset (or a synthetic stand-in), the metadata frame and the
-    split manifest (creating it if missing)."""
+    split manifest (creating it if missing).
+
+    ``max_per_class``: if > 0, keep at most this many samples per label
+    (balanced subsample *before* splitting), useful for quick test runs.
+    """
     hf_ds = synthetic_dataset(synthetic, seed=seed) if synthetic else load_css_dataset(dataset_name, cache_dir=cache_dir)
+
+    # --- optional balanced subsample --------------------------------
+    if max_per_class > 0 and not synthetic:
+        rng = np.random.default_rng(seed)
+        df_tmp = metadata_frame(hf_ds)
+        keep = []
+        for lbl in sorted(df_tmp["label"].unique()):
+            rows_lbl = df_tmp.loc[df_tmp["label"] == lbl, "row"].to_numpy()
+            if len(rows_lbl) > max_per_class:
+                rows_lbl = rng.choice(rows_lbl, max_per_class, replace=False)
+            keep.extend(rows_lbl.tolist())
+        keep = sorted(keep)
+        hf_ds = hf_ds.select(keep)
+        print(f"Subsampled to {len(hf_ds)} images ({max_per_class} per class).")
+
     df = metadata_frame(hf_ds)
     if manifest is not None and Path(manifest).exists():
         splits = load_manifest(manifest, df)

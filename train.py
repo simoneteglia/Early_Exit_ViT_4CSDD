@@ -19,6 +19,9 @@ from tqdm import tqdm
 from data import DATASET_NAME, build_datasets, build_loaders, prepare
 from ee_vit import DEFAULT_BACKBONE, EarlyExitViT, multi_exit_loss, save_checkpoint
 from metrics import ScoreCollector, per_exit_metrics
+import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "6,7"
 
 
 def parse_args():
@@ -27,6 +30,8 @@ def parse_args():
     p.add_argument("--cache-dir", default=None)
     p.add_argument("--manifest", default="manifests/splits.json", help="Split manifest (created if missing)")
     p.add_argument("--synthetic", type=int, default=0, help="Use N random images instead of the dataset")
+    p.add_argument("--max-per-class", type=int, default=0,
+                   help="Keep at most N samples per label (balanced subsample; 0 = all)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--backbone", default=DEFAULT_BACKBONE,
                    help="timm ViT, e.g. vit_small_patch16_dinov3.lvd1689m, vit_base_patch16_dinov3.lvd1689m, deit_small_patch16_224")
@@ -95,7 +100,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     hf_ds, df, splits = prepare(args.dataset, args.manifest, args.synthetic, args.seed,
-                                cache_dir=args.cache_dir)
+                                cache_dir=args.cache_dir, max_per_class=args.max_per_class)
     datasets = build_datasets(hf_ds, df, splits, args.image_size, args.random_crop)
     loaders = build_loaders(datasets, args.batch_size, args.num_workers, pin_memory=device.type == "cuda")
     print({k: len(v) for k, v in datasets.items()})
