@@ -71,7 +71,7 @@ ENV/
 
 # Model checkpoints & logs
 checkpoints/
-runs/
+# runs/
 logs/
 outputs/
 wandb/
@@ -95,6 +95,6 @@ datasets/
 ._*
 
 # Project artifacts (split manifests in manifests/ are versioned on purpose)
-*.db
+# *.db
 thresholds_search_data.pkl
 emissions.csv
