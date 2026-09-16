@@ -1,7 +1,7 @@
 """Global results panel: confusion matrix and metrics of the whole early-exit
-system, exit distribution, and the cost table (system vs. always-full-depth
-baseline). Port of ETA-DyNN's ``summary_plot.py`` generalised to N side
-exits; the final ViT head replaces the remote ViT4V stage.
+system, exit distribution, and the inference-cost table (early-exit system
+vs. always-full-depth baseline). Port of ETA-DyNN's ``summary_plot.py``
+generalised to N side exits; the final ViT head replaces the remote ViT4V stage.
 """
 from __future__ import annotations
 
@@ -13,7 +13,11 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precisio
 from experiments_db import EXPERIMENTS_DB, PERF_COLUMNS
 
 P_IDX = {name: i for i, name in enumerate(PERF_COLUMNS)}
-PHASES = ("preprocessing", "inference")
+COST_ROWS = (("duration", "Duration", "s", 1),
+             ("tot_energy", "Tot Energy", "Wh", 1000),
+             ("cpu_energy", "CPU Energy", "Wh", 1000),
+             ("gpu_energy", "GPU Energy", "Wh", 1000),
+             ("ram_energy", "RAM Energy", "Wh", 1000))
 
 
 class SummaryPlot:
@@ -27,22 +31,21 @@ class SummaryPlot:
         for cp in self.cps:
             cp.set_final_plot(self)
 
+        # Per-sample inference cost (duration, tot/cpu/gpu/ram energy) of
+        # reaching each side exit (cumulative) and of the full forward.
         db = EXPERIMENTS_DB(db_path)
-        self.energy_performance = {
-            "exits": [{ph: np.array(v, dtype=np.float64) for ph, v in
-                       db.get_performance(experiment_codename, dataset_codename, "ee_vit", e).items()}
-                      for e in range(self.n_side)],
-            "final": {ph: np.array(v, dtype=np.float64) for ph, v in
-                      db.get_performance(experiment_codename, dataset_codename, "full_vit").items()},
-            "transfer": np.array(db.get_transferring_performance(experiment_codename, dataset_codename),
-                                 dtype=np.float64),
+        self.inference_cost = {
+            "exits": [np.array(db.get_performance(experiment_codename, dataset_codename, "ee_vit", e)["inference"],
+                               dtype=np.float64) for e in range(self.n_side)],
+            "final": np.array(db.get_performance(experiment_codename, dataset_codename, "full_vit")["inference"],
+                              dtype=np.float64),
         }
         db.close()
-        if len(self.energy_performance["final"]["inference"]) != len(self.labels):
+        if len(self.inference_cost["final"]) != len(self.labels):
             raise ValueError("Performance rows do not match the number of samples in the DB")
 
         self.fig = plt.figure(figsize=(15, 5))
-        gs = gridspec.GridSpec(2, 3, width_ratios=[1.6, 1, 1])
+        gs = gridspec.GridSpec(2, 3, width_ratios=[1.3, 1, 1])
         self.ax_costs = self.fig.add_subplot(gs[:, 0])
         self.ax_total_cm = self.fig.add_subplot(gs[0, 1])
         self.ax_total_metrics = self.fig.add_subplot(gs[1, 1])
@@ -68,35 +71,28 @@ class SummaryPlot:
 
     # ------------------------------------------------------------ costs --
 
-    def compute_costs(self, p_metric, phase):
-        col = P_IDX[p_metric]
-        baseline = self.energy_performance["final"][phase][:, col].copy()
-        baseline[~self.test_mask] = 0
-        system = np.zeros_like(baseline)
-        for e, mask in enumerate(self.returned_by):
-            system[mask] = self.energy_performance["exits"][e][phase][mask, col]
-        system[self.returned_by_final] = baseline[self.returned_by_final]
-        return float(system.sum()), float(baseline.sum())
-
-    def compute_transferring_costs(self, p_metric):
-        tr = self.energy_performance["transfer"]
-        if tr.size == 0:
-            return 0.0
-        cost = tr[:, P_IDX[p_metric]].copy()
-        cost[~self.returned_by_final] = 0
-        return float(cost.sum())
-
     def retrieve_costs(self):
+        """Per metric: summed inference cost of the early-exit system (each
+        sample charged the cost of the exit that answered it), of the
+        always-full-depth baseline, and the percentage saved."""
         self.costs = {}
         for metric in PERF_COLUMNS:
-            pre, pre_base = self.compute_costs(metric, "preprocessing")
-            inf, inf_base = self.compute_costs(metric, "inference")
-            trans = self.compute_transferring_costs(metric)
+            col = P_IDX[metric]
+            baseline = self.inference_cost["final"][:, col].copy()
+            baseline[~self.test_mask] = 0
+            system = np.zeros_like(baseline)
+            for e, mask in enumerate(self.returned_by):
+                system[mask] = self.inference_cost["exits"][e][mask, col]
+            system[self.returned_by_final] = baseline[self.returned_by_final]
+            base_sum, sys_sum = float(baseline.sum()), float(system.sum())
             self.costs[metric] = {
-                "baseline": {"preprocessing": pre_base, "inference": inf_base, "total": pre_base + inf_base},
-                "system": {"preprocessing": pre, "inference": inf, "transferring": trans,
-                           "total": pre + inf + trans},
+                "system": sys_sum,
+                "baseline": base_sum,
+                "savings": (base_sum - sys_sum) / base_sum * 100 if base_sum > 0 else 0.0,
             }
+
+    def savings(self, metric):
+        return self.costs[metric]["savings"]
 
     def compute_metrics(self):
         self.retrieve_answers()
@@ -112,12 +108,6 @@ class SummaryPlot:
         }
 
     # ------------------------------------------------------------ plots --
-
-    def savings(self, metric):
-        base = self.costs[metric]["baseline"]["total"]
-        if base == 0:
-            return 0.0
-        return (base - self.costs[metric]["system"]["total"]) / base * 100
 
     def update_plot(self, draw=True):
         self.compute_metrics()
@@ -162,30 +152,17 @@ class SummaryPlot:
 
         self.ax_costs.clear()
         self.ax_costs.axis("off")
-        self.ax_costs.set_title("Costs", fontsize=11)
-        rows = []
-        for metric, label, unit, scale in (("duration", "Duration", "s", 1),
-                                           ("tot_energy", "Tot Energy", "Wh", 1000),
-                                           ("cpu_energy", "CPU Energy", "Wh", 1000),
-                                           ("gpu_energy", "GPU Energy", "Wh", 1000),
-                                           ("ram_energy", "RAM Energy", "Wh", 1000)):
-            c = self.costs[metric]
-            rows.append([f'{c["system"]["preprocessing"] * scale:.4f} {unit}',
-                         f'{c["baseline"]["preprocessing"] * scale:.4f} {unit}',
-                         f'{c["system"]["inference"] * scale:.4f} {unit}',
-                         f'{c["baseline"]["inference"] * scale:.4f} {unit}',
-                         f'{c["system"]["transferring"] * scale:.4f} {unit}',
-                         f'{c["system"]["total"] * scale:.4f} {unit}',
-                         f'{c["baseline"]["total"] * scale:.4f} {unit}',
-                         f'{self.savings(metric):.2f}%'])
+        self.ax_costs.set_title("Inference costs", fontsize=11)
+        rows = [[f'{self.costs[m]["system"] * scale:.4f} {unit}',
+                 f'{self.costs[m]["baseline"] * scale:.4f} {unit}',
+                 f'{self.costs[m]["savings"]:.2f}%'] for m, _, unit, scale in COST_ROWS]
         table = self.ax_costs.table(
             cellText=rows,
-            colLabels=["Sys (Pre)", "Base (Pre)", "Sys (Inf)", "Base (Inf)",
-                       "Sys (Trans)", "Sys (Tot)", "Base (Tot)", "Savings"],
-            rowLabels=["Duration", "Tot Energy", "CPU Energy", "GPU Energy", "RAM Energy"],
+            colLabels=["System (early-exit ViT)", "Baseline (full ViT)", "Savings"],
+            rowLabels=[label for _, label, _, _ in COST_ROWS],
             bbox=[0, 0, 1, 1])
         table.auto_set_font_size(False)
-        table.set_fontsize(7)
+        table.set_fontsize(8)
         self.fig.canvas.draw_idle()
 
     def close(self):

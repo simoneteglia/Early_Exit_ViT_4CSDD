@@ -19,9 +19,6 @@ from tqdm import tqdm
 from data import DATASET_NAME, build_datasets, build_loaders, prepare
 from ee_vit import DEFAULT_BACKBONE, EarlyExitViT, multi_exit_loss, save_checkpoint
 from metrics import ScoreCollector, per_exit_metrics
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "6,7"
 
 
 def parse_args():

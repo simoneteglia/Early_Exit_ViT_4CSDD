@@ -71,6 +71,7 @@ class ThresholdsWindow(QWidget):
         self.ref_labels = np.asarray(ref["labels"], dtype=np.int64)
         self.ref_css = np.asarray(ref["css_scores"], dtype=np.float32)
         self.ref_tiers = np.asarray(ref.get("tiers", ["ALL"] * len(self.ref_labels)), dtype=object)
+        self.ref_sources = self._sources(ref.get("sample_ids", []), len(self.ref_labels))
         ref_scores = {s["exit_idx"]: np.asarray(s["scores"])[:, 1] for s in ref["scores"]}
 
         db = EXPERIMENTS_DB(db_path)
@@ -80,6 +81,7 @@ class ThresholdsWindow(QWidget):
         self.test_css = np.asarray([1.0 if c is None else c for c in css], dtype=np.float32)
         tiers = db.get_sensitivity_tiers(dataset_codename)
         self.test_tiers = np.asarray(["ALL" if t is None else t for t in tiers], dtype=object)
+        self.test_sources = self._sources([r[1] for r in db.get_dataset_samples(dataset_codename)], len(self.test_labels))
         test_scores = {e: np.array([np.mean(s) for s in db.get_scores(experiment_codename, dataset_codename, "ee_vit", e)],
                                    dtype=np.float32) for e in self.exit_indexes}
         final_scores = np.array([np.mean(s) for s in db.get_scores(experiment_codename, dataset_codename, "full_vit")],
@@ -148,6 +150,12 @@ class ThresholdsWindow(QWidget):
         grid.addWidget(QLabel("Content sensitivity tier:"), 0, 0)
         grid.addWidget(self.tier_combo, 0, 1)
 
+        self.source_combo = QComboBox()
+        self.source_combo.addItems(["ALL"] + sorted(set(self.test_sources.tolist()) - {"ALL"}))
+        self.source_combo.currentTextChanged.connect(lambda _: self.apply_context())
+        grid.addWidget(QLabel("Source dataset:"), 0, 2)
+        grid.addWidget(self.source_combo, 0, 3)
+
         self.user_slider, self.user_value = self._slider("User susceptibility s_u", grid, 1)
         self.policy_slider, self.policy_value = self._slider("Policy strictness p", grid, 2)
 
@@ -195,6 +203,15 @@ class ThresholdsWindow(QWidget):
     # ----------------------------------------------------------- state --
 
     @staticmethod
+    def _sources(sample_ids, n):
+        """Source dataset of each sample = prefix of its id before the first '_'
+        (e.g. 'rrdataset_0012' -> 'rrdataset'); 'ALL' when ids are unavailable."""
+        ids = [str(s) for s in sample_ids]
+        if len(ids) != n:
+            return np.full(n, "ALL", dtype=object)
+        return np.asarray([s.split("_", 1)[0] if "_" in s else "ALL" for s in ids], dtype=object)
+
+    @staticmethod
     def _load_base_thresholds(path):
         if not path:
             return {}
@@ -205,8 +222,12 @@ class ThresholdsWindow(QWidget):
     def apply_context(self, draw=True):
         """Recompute margins and tier masks from the controls and refresh everything."""
         tier = self.tier_combo.currentText()
+        source = self.source_combo.currentText()
         ref_mask = np.ones(len(self.ref_labels), bool) if tier == "ALL" else self.ref_tiers == tier
         test_mask = np.ones(len(self.test_labels), bool) if tier == "ALL" else self.test_tiers == tier
+        if source != "ALL":
+            ref_mask &= self.ref_sources == source
+            test_mask &= self.test_sources == source
         s_u, p = self.user_sensitivity, self.policy_strictness
         ref_margin = self.policy.margin(normalize_css(self.ref_css), s_u, p)
         test_margin = self.policy.margin(normalize_css(self.test_css), s_u, p)
@@ -217,7 +238,7 @@ class ThresholdsWindow(QWidget):
         self.margin_label.setText(
             f"margin m on the selected test samples: mean={np.mean(m) if len(m) else 0:.2f}, "
             f"min={np.min(m) if len(m) else 0:.2f}, max={np.max(m) if len(m) else 0:.2f}   "
-            f"({int(test_mask.sum())} samples)")
+            f"({int(test_mask.sum())} test / {int(ref_mask.sum())} reference samples)")
         self.refresh(draw)
 
     def refresh(self, draw=True):
@@ -254,7 +275,7 @@ class ThresholdsWindow(QWidget):
             "final_answers": sp.final_answers.copy(),
             "labels": sp.labels.copy(),
             "css_scores": self.test_css.copy(),
-            "energy_performance": sp.energy_performance,
+            "inference_cost": sp.inference_cost,
             "thresholds": [cp.get_thresholds() for cp in self.confidence_panels],
             "policy": self.policy.to_dict(),
             "user_sensitivity": self.user_sensitivity,
