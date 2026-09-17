@@ -13,3 +13,5 @@ matplotlib
 tqdm
 PyQt5
 codecarbon
+networkx
+ndlib

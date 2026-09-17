@@ -18,6 +18,7 @@ sys.path.insert(0, str(HERE.parent))
 from PyQt5.QtWidgets import QApplication, QStackedWidget  # noqa: E402
 
 from human_factors import ThresholdPolicy  # noqa: E402
+from simulation_window import SimulationWindow  # noqa: E402
 from thresholds_window import ThresholdsWindow  # noqa: E402
 
 
@@ -28,7 +29,10 @@ class MainWindow(QStackedWidget):
         self.thresholds_window = ThresholdsWindow(self, args.scores, args.db, args.experiment, args.dataset,
                                                   reference_split=args.reference_split,
                                                   thresholds_path=args.thresholds, policy=policy)
-        self.addWidget(self.thresholds_window)  # index 0; a simulation screen would be index 1
+        self.simulation_window = SimulationWindow(self, args.db, args.experiment, args.dataset)
+        self.thresholds_window.set_simulation_widget(self.simulation_window)
+        self.addWidget(self.thresholds_window)  # index 0
+        self.addWidget(self.simulation_window)  # index 1
         self.setWindowTitle("Deepfake early-exit explorer")
         self.showMaximized()
 

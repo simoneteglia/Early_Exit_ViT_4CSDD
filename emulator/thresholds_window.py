@@ -160,20 +160,30 @@ class ThresholdsWindow(QWidget):
         self.policy_slider, self.policy_value = self._slider("Policy strictness p", grid, 2)
 
         self.coef_boxes = {}
-        for col, (name, tip) in enumerate((("m0", "base margin"), ("alpha", "content sensitivity weight"),
-                                           ("beta", "user susceptibility weight"), ("gamma", "policy weight"),
-                                           ("m_max", "margin cap"))):
-            grid.addWidget(QLabel(f"{name} ({tip})"), 3, 2 * col)
+        coef_row = QHBoxLayout()  # own layout so the pairs do not widen the grid's columns
+        coef_row.addWidget(QLabel("margin coefficients:"))
+        for name, symbol, tip in (("m0", "m0", "base margin"),
+                                  ("alpha", "α", "content sensitivity weight"),
+                                  ("beta", "β", "user susceptibility weight"),
+                                  ("gamma", "γ", "policy weight"),
+                                  ("m_max", "m_max", "margin cap")):
+            label = QLabel(symbol)
+            label.setToolTip(tip)
+            coef_row.addWidget(label)
             sb = QDoubleSpinBox()
+            sb.setToolTip(tip)
             sb.setRange(0.0, 1.0)
             sb.setSingleStep(0.05)
             sb.setDecimals(2)
             sb.setValue(getattr(self.policy, name))
             sb.valueChanged.connect(lambda v, n=name: self._set_coef(n, v))
-            grid.addWidget(sb, 3, 2 * col + 1)
+            coef_row.addWidget(sb)
             self.coef_boxes[name] = sb
+        coef_row.addStretch(1)
+        grid.addLayout(coef_row, 3, 0, 1, 6)
 
         self.margin_label = QLabel("")
+        self.margin_label.setWordWrap(True)
         grid.addWidget(self.margin_label, 4, 0, 1, 6)
         return box
 
