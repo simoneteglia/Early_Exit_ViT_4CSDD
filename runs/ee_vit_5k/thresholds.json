@@ -1,26 +1,3 @@
-{
-  "exit_points": [
-    3,
-    7
-  ],
-  "side_exits": [
-    {
-      "exit_idx": 0,
-      "lower": 0.35000000000000003,
-      "upper": 0.73,
-      "objective": 0.954286920877334
-    },
-    {
-      "exit_idx": 1,
-      "lower": 0.25,
-      "upper": 0.81,
-      "objective": 0.9897330386600198
-    }
-  ],
-  "final": {
-    "lower": 0.5,
-    "upper": 0.5
-  },
-  "calibration_split": "val",
-  "method": "beta"
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:9f856d3deb1e1e753288fbeedef1a16df94dfddfea5ca07a312d98982669612a
+size 406

@@ -15,10 +15,12 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from scipy.spatial import cKDTree
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
                              QLineEdit, QProgressBar, QPushButton, QSlider, QSpinBox, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
+import hf_images
 from experiments_db import PERF_COLUMNS
 from human_factors import ThresholdPolicy
 from propagation import (SCENARIOS, STATUS_I, STATUS_R, STATUS_S, SimParams, build_network, load_items,
@@ -67,6 +69,21 @@ class SimulationWorker(QThread):
             self.failed.emit(traceback.format_exc())
 
 
+class ImageFetchWorker(QThread):
+    done = pyqtSignal(str, object)  # sample_id, local path or None
+
+    def __init__(self, sample_id):
+        super().__init__()
+        self.sample_id = sample_id
+
+    def run(self):
+        try:
+            path = hf_images.fetch_image(self.sample_id)
+        except Exception:  # noqa: BLE001
+            path = None
+        self.done.emit(self.sample_id, path)
+
+
 class SimulationWindow(QWidget):
     def __init__(self, stacked_widget, db_path, experiment_codename, dataset_codename):
         super().__init__()
@@ -79,6 +96,9 @@ class SimulationWindow(QWidget):
         self.base_lower, self.base_upper = [], []
         self.policy = ThresholdPolicy()
         self.policy_strictness = 0.0
+        self._image_cache = {}       # sample_id -> QPixmap, in-memory on top of the on-disk cache
+        self._image_worker = None
+        self._pending_image_id = None
 
         outer = QVBoxLayout(self)
         header = QHBoxLayout()
@@ -140,6 +160,12 @@ class SimulationWindow(QWidget):
         form.addRow(self.run_btn)
         form.addRow(self.progress)
         form.addRow(self.status)
+        self.item_image_label = QLabel("(select an item to preview its image)")
+        self.item_image_label.setAlignment(Qt.AlignCenter)
+        self.item_image_label.setWordWrap(True)
+        self.item_image_label.setFixedSize(300, 220)
+        self.item_image_label.setStyleSheet("border: 1px solid palette(mid);")
+        form.addRow(self.item_image_label)
         box.setMaximumWidth(340)
         return box
 
@@ -332,6 +358,35 @@ class SimulationWindow(QWidget):
         self.step_slider.setValue(row["steps"])
         self.step_slider.blockSignals(False)
         self.draw_network()
+        self._request_image(self.result["items"][self.item_combo.currentIndex()].sample_id)
+
+    # ------------------------------------------------------------- image --
+
+    def _request_image(self, sample_id):
+        self._pending_image_id = sample_id
+        cached = self._image_cache.get(sample_id)
+        if cached is not None:
+            self._set_image_pixmap(cached)
+            return
+        self.item_image_label.setText(f"loading {sample_id}…")
+        worker = ImageFetchWorker(sample_id)
+        worker.done.connect(self._on_image_fetched)
+        self._image_worker = worker
+        worker.start()
+
+    def _on_image_fetched(self, sample_id, path):
+        if path is None:
+            if sample_id == self._pending_image_id:
+                self.item_image_label.setText(f"image unavailable for {sample_id}")
+            return
+        pixmap = QPixmap(str(path))
+        self._image_cache[sample_id] = pixmap
+        if sample_id == self._pending_image_id:
+            self._set_image_pixmap(pixmap)
+
+    def _set_image_pixmap(self, pixmap):
+        size = self.item_image_label.size()
+        self.item_image_label.setPixmap(pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _status_at(self, row, step):
         status = np.full(self.result["graph"].number_of_nodes(), STATUS_S)
@@ -346,6 +401,7 @@ class SimulationWindow(QWidget):
         g, pos = self.result["graph"], self.result["pos"]
         ax = self.net_ax
         ax.clear()
+        self._tooltip = None
         nx.draw_networkx_edges(g, pos, ax=ax, alpha=0.08, width=0.5)
         self._nodes = nx.draw_networkx_nodes(g, pos, ax=ax, node_size=self._sizes,
                                              node_color=STATUS_COLORS[STATUS_S], linewidths=0)

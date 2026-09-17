@@ -98,3 +98,6 @@ datasets/
 # *.db
 thresholds_search_data.pkl
 emissions.csv
+
+# Locally cached dataset images fetched on demand by the explorer (screen 2)
+image_cache/
