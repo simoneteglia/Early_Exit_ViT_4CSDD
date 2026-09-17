@@ -53,7 +53,9 @@ class SimulationWorker(QThread):
         items, params, policy, base_lower, base_upper, p = self.args
         try:
             rng = np.random.default_rng(params.seed)
-            chosen = select_items(items, params.n_items, rng)
+            chosen = select_items(items, params.n_items, rng, source=params.source)
+            if not chosen:
+                raise ValueError(f"no test items for source '{params.source}'")
             g, g_dir = build_network(params)
             s_u = sample_user_sensitivity(g.number_of_nodes(), rng, params.mist_path)
             pos = nx.spring_layout(g, seed=params.seed, k=1.2 / np.sqrt(g.number_of_nodes()))
@@ -115,6 +117,9 @@ class SimulationWindow(QWidget):
         self.seeds_per_item = QSpinBox(); self.seeds_per_item.setRange(1, 100); self.seeds_per_item.setValue(1)
         self.seed_strategy = QComboBox(); self.seed_strategy.addItems(["random", "hub"])
         self.n_items = QSpinBox(); self.n_items.setRange(2, 5000); self.n_items.setValue(60)
+        self.source_combo = QComboBox(); self.source_combo.addItem("ALL")
+        self.source_combo.setToolTip("Restrict the simulated items to one source dataset "
+                                     "(only the mixed real/fake source is free of the source shortcut)")
         self.max_steps = QSpinBox(); self.max_steps.setRange(1, 500); self.max_steps.setValue(50)
         self.rng_seed = QSpinBox(); self.rng_seed.setRange(0, 10**6); self.rng_seed.setValue(0)
         self.mist_path = QLineEdit(); self.mist_path.setPlaceholderText("optional: MIST data file (OSF)")
@@ -123,7 +128,8 @@ class SimulationWindow(QWidget):
                          ("Susceptibility effect κ", self.kappa),
                          ("Intervention w (1 = block)", self.intervention),
                          ("Seeds per item", self.seeds_per_item), ("Seed strategy", self.seed_strategy),
-                         ("Test items", self.n_items), ("Max steps", self.max_steps),
+                         ("Test items", self.n_items), ("Source dataset", self.source_combo),
+                         ("Max steps", self.max_steps),
                          ("Random seed", self.rng_seed), ("MIST file", self.mist_path)):
             form.addRow(label, w)
         self.run_btn = QPushButton("Run simulation")
@@ -190,6 +196,9 @@ class SimulationWindow(QWidget):
 
     def update_simulation_data(self, data):
         """Receive thresholds / policy chosen on the thresholds screen."""
+        if self.items is None:
+            self.items = load_items(*self.db_args)
+            self._populate_sources()
         self.base_lower = [lo for lo, _ in data["thresholds"]]
         self.base_upper = [up for _, up in data["thresholds"]]
         self.policy = ThresholdPolicy.from_dict(data["policy"])
@@ -209,13 +218,35 @@ class SimulationWindow(QWidget):
                          self.seed_strategy.currentText(), self.max_steps.value(), self.rng_seed.value(),
                          self.mist_path.text().strip() or None)
 
+    def _populate_sources(self):
+        """Fill the source selector with the sources present in the DB, with a
+        note on which contain both real and fake items."""
+        counts = {}
+        for it in self.items:
+            counts.setdefault(it.source, [0, 0])[it.label] += 1
+        current = self.source_combo.currentText()
+        self.source_combo.blockSignals(True)
+        self.source_combo.clear()
+        self.source_combo.addItem("ALL")
+        for src in sorted(counts):
+            n_real, n_fake = counts[src]
+            self.source_combo.addItem(src)
+            self.source_combo.setItemData(self.source_combo.count() - 1,
+                                          f"{n_real} real / {n_fake} fake" + ("" if n_real and n_fake else " (single class)"),
+                                          Qt.ToolTipRole)
+        idx = self.source_combo.findText(current)
+        self.source_combo.setCurrentIndex(max(idx, 0))
+        self.source_combo.blockSignals(False)
+
     def run_simulation(self):
         if self.worker is not None and self.worker.isRunning():
             return
         if self.items is None:
             self.items = load_items(*self.db_args)
+            self._populate_sources()
         params = self._params()
         params.n_items = self.n_items.value()
+        params.source = self.source_combo.currentText()
         self.run_btn.setEnabled(False)
         self.progress.setValue(0)
         self.status.setText("running...")
@@ -235,8 +266,10 @@ class SimulationWindow(QWidget):
         self.run_btn.setEnabled(True)
         self.progress.setValue(100)
         s = result["summary"]["ee_human"]
-        self.status.setText(f"done: {len(result['items'])} items, {result['graph'].number_of_nodes()} users. "
-                            f"Human-centered early exit: fake reach −{s['fake_reach_reduction']*100:.0f}%, "
+        red = s["fake_reach_reduction"]
+        self.status.setText(f"done: {len(result['items'])} items ({result['params'].source}), "
+                            f"{result['graph'].number_of_nodes()} users. Human-centered early exit: "
+                            f"fake reach {'n/a' if np.isnan(red) else f'−{red*100:.0f}%'}, "
                             f"inference energy saving {s['savings']['tot_energy']:.0f}% vs full ViT.")
         self.fill_table()
         self.draw_trends()
@@ -480,8 +513,9 @@ class SimulationWindow(QWidget):
         self.table.setHorizontalHeaderLabels(cols)
         for i, sc in enumerate(SCENARIOS):
             s = summary[sc]
-            values = [s["label"], f"{s['fake_reach']*100:.2f}%", f"{s['fake_reach_reduction']*100:.1f}%",
-                      f"{s['real_reach']*100:.2f}%", f"{s['real_reach_loss']*100:.1f}%", f"{s['invocations']}",
+            pct = lambda v, d=2: "n/a" if v is None or np.isnan(v) else f"{v*100:.{d}f}%"
+            values = [s["label"], pct(s["fake_reach"]), pct(s["fake_reach_reduction"], 1),
+                      pct(s["real_reach"]), pct(s["real_reach_loss"], 1), f"{s['invocations']}",
                       f"{s['cost']['duration']:.3f} s", f"{s['savings']['duration']:.1f}%",
                       f"{s['cost']['tot_energy']*1000:.4f} Wh", f"{s['savings']['tot_energy']:.1f}%",
                       " / ".join(f"{d*100:.0f}%" for d in s["exit_distribution"])]

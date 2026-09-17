@@ -27,6 +27,7 @@ def parse_args():
     p.add_argument("--policy", default=None, help="JSON with m0/alpha/beta/gamma/m_max")
     p.add_argument("--policy-strictness", type=float, default=0.0, help="p in [0, 1]")
     p.add_argument("--items", type=int, default=60, help="Number of test items (0 = all)")
+    p.add_argument("--source", default="ALL", help="Restrict items to one source dataset (sample-id prefix), e.g. rrdataset")
     p.add_argument("--nodes", type=int, default=1000)
     p.add_argument("--ba-m", type=int, default=3)
     p.add_argument("--p-share", type=float, default=0.15)
@@ -44,17 +45,20 @@ def parse_args():
 def main():
     args = parse_args()
     params = SimParams(args.nodes, args.ba_m, args.p_share, args.kappa, args.intervention,
-                       args.seeds_per_item, args.seed_strategy, args.max_steps, args.seed, args.mist)
+                       args.seeds_per_item, args.seed_strategy, args.max_steps, args.seed, args.mist,
+                       n_items=args.items, source=args.source)
     policy = ThresholdPolicy.from_dict(json.load(open(args.policy))) if args.policy else ThresholdPolicy()
     thr = json.load(open(args.thresholds))
     base_lower = [t["lower"] for t in thr["side_exits"]]
     base_upper = [t["upper"] for t in thr["side_exits"]]
 
     rng = np.random.default_rng(args.seed)
-    items = select_items(load_items(args.db, args.experiment, args.dataset), args.items, rng)
+    items = select_items(load_items(args.db, args.experiment, args.dataset), args.items, rng, source=args.source)
+    if not items:
+        raise SystemExit(f"no items for source '{args.source}'")
     g, g_dir = build_network(params)
     s_u = sample_user_sensitivity(g.number_of_nodes(), rng, args.mist)
-    print(f"{len(items)} items ({sum(i.label for i in items)} fake), network n={g.number_of_nodes()} "
+    print(f"{len(items)} items ({sum(i.label for i in items)} fake, source={args.source}), network n={g.number_of_nodes()} "
           f"edges={g.number_of_edges()}, s_u mean={s_u.mean():.2f}, p={args.policy_strictness}, w={args.intervention}")
 
     rows = simulate(items, g_dir, s_u, policy, base_lower, base_upper, args.policy_strictness, params,

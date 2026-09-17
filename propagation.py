@@ -70,6 +70,7 @@ class SimParams:
     seed: int = 0
     mist_path: str | None = None
     n_items: int = 60
+    source: str = "ALL"            # restrict items to one source dataset (sample-id prefix)
 
     def to_dict(self):
         return asdict(self)
@@ -95,8 +96,11 @@ def load_items(db_path, experiment, dataset) -> list[Item]:
     return items
 
 
-def select_items(items, n, rng, stratify=True):
-    """Balanced subsample: equal numbers of real and fake, spread over tiers."""
+def select_items(items, n, rng, stratify=True, source="ALL"):
+    """Balanced subsample: equal numbers of real and fake, spread over tiers,
+    optionally restricted to one source dataset."""
+    if source and source != "ALL":
+        items = [it for it in items if it.source == source]
     if n <= 0 or n >= len(items):
         return list(items)
     if not stratify:
@@ -105,7 +109,8 @@ def select_items(items, n, rng, stratify=True):
     for it in items:
         groups.setdefault((it.label, it.tier), []).append(it)
     chosen = []
-    per_label = {0: n // 2, 1: n - n // 2}
+    labels = sorted({k[0] for k in groups})
+    per_label = {lb: n // len(labels) for lb in labels}
     for label, quota in per_label.items():
         keys = [k for k in groups if k[0] == label]
         pools = {k: list(rng.permutation(groups[k])) for k in keys}
@@ -273,8 +278,8 @@ def summarize(rows, scenarios=SCENARIOS):
             "label": SCENARIO_LABELS.get(sc, sc),
             "fake_reach": float(np.mean(fake)) if fake else np.nan,
             "real_reach": float(np.mean(real)) if real else np.nan,
-            "fake_reach_reduction": float(1 - np.mean(fake) / none_fake) if fake and none_fake > 0 else 0.0,
-            "real_reach_loss": float(1 - np.mean(real) / none_real) if real and none_real > 0 else 0.0,
+            "fake_reach_reduction": float(1 - np.mean(fake) / none_fake) if fake and none_fake > 0 else np.nan,
+            "real_reach_loss": float(1 - np.mean(real) / none_real) if real and none_real > 0 else np.nan,
             "invocations": int(sum(r["invocations"] for r in rs)),
             "exit_distribution": (hist / max(hist.sum(), 1)).tolist(),
             "cost": cost,
